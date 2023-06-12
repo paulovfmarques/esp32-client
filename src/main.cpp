@@ -1,4 +1,5 @@
 #include <DHT.h>
+#include <esp_wifi.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WiFiMulti.h>
@@ -17,7 +18,7 @@
 #define WS_HOST "owmyj4aod8.execute-api.sa-east-1.amazonaws.com" // IP or domain
 #define WS_PORT 443                                              // 443 for SSL
 // the deviceId is arbitrary, but MUST be unique for each device
-#define WS_PATH "/dev?clientType=device&deviceId=esp32-websocket-client" // Path to websocket
+#define WS_PATH "/dev?clientType=device&deviceId=" // Path to websocket
 #define WS_FINGERPRINT ""                                                // Fingerprint
 #define WS_PROTOCOL "wss"                                                // Protocol
 
@@ -134,25 +135,23 @@ void setup()
     digitalWrite(LED_BUILTIN, HIGH);
     delay(500);
     digitalWrite(LED_BUILTIN, LOW);
-    delay(500);
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(500);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(500);
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(500);
-    digitalWrite(LED_BUILTIN, LOW);
   }
 
   Serial.println("WiFi connected!");
 
   Serial.println(WiFi.localIP());
 
-  wsClient.beginSSL(WS_HOST, WS_PORT, WS_PATH, WS_FINGERPRINT, WS_PROTOCOL); // Connect to the websocket server.
+  uint64_t chipid = ESP.getEfuseMac();
+  String deviceId = String((uint16_t)(chipid>>32), HEX) + String((uint32_t)chipid, HEX);
+  deviceId.toUpperCase();
+
+  String finalPath = String(WS_PATH) + deviceId;
+
+  wsClient.beginSSL(WS_HOST, WS_PORT, finalPath, WS_FINGERPRINT, WS_PROTOCOL); // Connect to the websocket server.
   wsClient.onEvent(webSocketEvent);                                          // Bind the event handler.
   dht.begin();                                                               // Initialize the DHT sensor.
 
-  timer.set_interval(sendDHTData, 500); // Send DHT data every 500ms.
+  timer.set_interval(sendDHTData, 1000); // Send DHT data every 1s.
   timer.attach_to_loop();               // Attach the timer to the loop.
 }
 
