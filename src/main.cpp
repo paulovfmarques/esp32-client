@@ -42,7 +42,7 @@ void sendErrorMessage(const char *error)
 }
 
 // Função para tratar o payload recebido
-void handlePaylod(uint8_t *payload)
+void IRAM_ATTR handlePaylod(uint8_t *payload)
 {
   // Criação do documento JSON para armazenar o payload
   StaticJsonDocument<JSON_DOC_SIZE> doc;
@@ -126,8 +126,18 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
   }
 }
 
+void IRAM_ATTR notifyLedState()
+{
+  bool currentLEDState = digitalRead(LED_PIN_15);
+
+  char msg[MSG_SIZE];
+  sprintf(msg, "{\"action\":\"msg\",\"type\":\"led_state\",\"body\":{ \"ledPin\":%d, \"state\":\"%s\"}}", LED_PIN_15, currentLEDState ? "on" : "off");
+
+  wsClient.sendTXT(msg);
+}
+
 // Função para enviar dados do DHT
-void sendDHTData()
+void IRAM_ATTR sendDHTData()
 {
   float humidity = dht.readHumidity();
   float tempCelsius = dht.readTemperature();
@@ -197,6 +207,9 @@ void setup()
 
   // Definição do intervalo para envio dos dados do DHT
   timer.set_interval(sendDHTData, 1000);
+
+  // Definição do intervalo para envio do estado do LED
+  timer.set_interval(notifyLedState, 750);
 
   // Vinculação do timer ao loop
   timer.attach_to_loop();
