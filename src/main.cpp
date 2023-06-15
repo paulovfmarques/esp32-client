@@ -6,32 +6,32 @@
 #include <WebSocketsClient.h>
 #include <timer.h>
 
+// Definição das constantes utilizadas para conexão Wi-Fi e websocket
 #define WIFI_SSID "Paulo Sergio"
 #define WIFI_PWD "pvfm1994"
 
-#define WSS_ERROR_PIN 19
+#define LED_PIN_15 15
 
 #define DHT_PIN 2
 #define DHT_TYPE DHT11
 
-// AWS_GATEWAY_API_ID.execute-api.AWS_REGION.amazonaws.com
-#define WS_HOST "owmyj4aod8.execute-api.sa-east-1.amazonaws.com" // IP or domain
-#define WS_PORT 443                                              // 443 for SSL
-// the deviceId is arbitrary, but MUST be unique for each device
-#define WS_PATH "/dev?clientType=device&deviceId=" // Path to websocket
-#define WS_FINGERPRINT ""                                                // Fingerprint
-#define WS_PROTOCOL "wss"                                                // Protocol
+#define WS_HOST "d441ny46de.execute-api.sa-east-1.amazonaws.com" // IP ou domínio
+#define WS_PORT 443                                              // 443 para SSL
+#define WS_PATH "/dev?clientType=device&deviceId="               // Caminho para websocket
+#define WS_FINGERPRINT ""                                        // Impressão digital
+#define WS_PROTOCOL "wss"                                        // Protocolo
 
 #define JSON_DOC_SIZE 2048
 #define MSG_SIZE 256
 
+// Instanciação dos objetos
 WiFiMulti wifiMulti;
 WebSocketsClient wsClient;
 uniuno::Timer timer;
 
 DHT dht(DHT_PIN, DHT_TYPE);
 
-// Send error message to the server.
+// Função para enviar uma mensagem de erro ao servidor
 void sendErrorMessage(const char *error)
 {
   char msg[MSG_SIZE];
@@ -41,45 +41,72 @@ void sendErrorMessage(const char *error)
   wsClient.sendTXT(msg);
 }
 
-// Send confirmation of receipt.
-void sendOkMessage()
-{
-  wsClient.sendTXT("{\"action\":\"msg\",\"type\":\"status\",\"body\":\"ok\"}");
-}
-
+// Função para tratar o payload recebido
 void handlePaylod(uint8_t *payload)
 {
-  // Use https://arduinojson.org/v6/assistant to compute the capacity (in bytes).
+  // Criação do documento JSON para armazenar o payload
   StaticJsonDocument<JSON_DOC_SIZE> doc;
 
+  // Desserialização do payload
   DeserializationError error = deserializeJson(doc, payload);
 
-  // Test if parsing succeeds.
+  // Verificação se houve erro na deserialização
   if (error)
   {
-    Serial.print(F("deserializeJson() failed: "));
-    Serial.println(error.f_str());
-
     sendErrorMessage(error.c_str());
     return;
   }
 
-  // These are common server errors. There may be others.
+  // Verificação se houve algum erro comum do servidor
   if (doc["message"] == "Forbidden" || doc["message"] == "Internal server error")
   {
-    digitalWrite(WSS_ERROR_PIN, HIGH);
-    Serial.print("Error: ");
-    Serial.println(doc["message"].as<String>());
-    Serial.println("");
+    sendErrorMessage(doc["message"].as<String>().c_str());
     delay(5000);
     return;
   }
 
-  // DEBUGGING ONLY
-  Serial.println(doc.as<String>());
-  return;
+  // Verificação da ação
+  const char *type = doc["type"];
+  if (type == nullptr)
+  {
+    // A ação não foi especificada. Trate isso como um erro.
+    sendErrorMessage("Action not specified");
+    return;
+  }
+
+  // Se a ação for "toggle_led", leia o ledPin da mensagem
+  if (strcmp(type, "toggle_led") == 0)
+  {
+    int ledPin = doc["ledPin"];
+    if (ledPin <= 0)
+    {
+      sendErrorMessage("Invalid LED pin");
+      return;
+    }
+
+    // Alternar o estado do LED.
+    bool ledState = digitalRead(ledPin);
+    digitalWrite(ledPin, !ledState);
+
+    // Verificar se a operação digitalWrite foi bem-sucedida.
+    bool newLedState = digitalRead(ledPin);
+
+    if (newLedState != !ledState)
+    {
+      sendErrorMessage("Failed to toggle LED");
+      return;
+    }
+
+    // Enviar o estado atualizado do LED de volta para a interface do usuário.
+    char msg[MSG_SIZE];
+
+    sprintf(msg, "{\"action\":\"msg\",\"type\":\"led_state\",\"body\":{ \"ledPin\":%d, \"state\":\"%s\"}}", ledPin, newLedState ? "on" : "off");
+
+    wsClient.sendTXT(msg);
+  }
 }
 
+// Função para tratar eventos de websocket
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
 {
   switch (type)
@@ -99,11 +126,13 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
   }
 }
 
+// Função para enviar dados do DHT
 void sendDHTData()
 {
   float humidity = dht.readHumidity();
   float tempCelsius = dht.readTemperature();
 
+  // Verificação se a leitura foi realizada corretamente
   if (isnan(humidity) || isnan(tempCelsius))
   {
     sendErrorMessage("Failed to read from DHT sensor!");
@@ -111,22 +140,25 @@ void sendDHTData()
     return;
   }
 
+  // Criação da mensagem com os dados do sensor
   char msg[MSG_SIZE];
 
   sprintf(msg, "{\"action\":\"msg\",\"type\":\"sensor\",\"body\":{ \"name\":\"DHT11\", \"data\":[{\"label\":\"Humidity\",\"value\":%.2f, \"unit\":\"%%%\"},{\"label\":\"Temperature\",\"value\":%.2f, \"unit\":\"ºC\"}]}}", humidity, tempCelsius);
 
-  Serial.println(msg);
-
   wsClient.sendTXT(msg);
 }
 
+// Função de configuração
 void setup()
 {
-  // put your setup code here, to run once:
+  // Início da comunicação serial
   Serial.begin(115200);
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(WSS_ERROR_PIN, OUTPUT);
 
+  // Definição dos pinos como saída
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(LED_PIN_15, OUTPUT);
+
+  // Adição do ponto de acesso Wi-Fi
   wifiMulti.addAP(WIFI_SSID, WIFI_PWD);
 
   Serial.println("\nConnecting to WiFi...");
@@ -139,22 +171,38 @@ void setup()
 
   Serial.println("WiFi connected!");
 
+  // Impressão do IP local
   Serial.println(WiFi.localIP());
 
+  // Obtenção do ID do dispositivo
   uint64_t chipid = ESP.getEfuseMac();
-  String deviceId = String((uint16_t)(chipid>>32), HEX) + String((uint32_t)chipid, HEX);
+  String deviceId = String((uint16_t)(chipid >> 32), HEX) + String((uint32_t)chipid, HEX);
   deviceId.toUpperCase();
 
+  // Criação do caminho final para o websocket
   String finalPath = String(WS_PATH) + deviceId;
 
-  wsClient.beginSSL(WS_HOST, WS_PORT, finalPath, WS_FINGERPRINT, WS_PROTOCOL); // Connect to the websocket server.
-  wsClient.onEvent(webSocketEvent);                                          // Bind the event handler.
-  dht.begin();                                                               // Initialize the DHT sensor.
+  delay(1000);
 
-  timer.set_interval(sendDHTData, 1000); // Send DHT data every 1s.
-  timer.attach_to_loop();               // Attach the timer to the loop.
+  // Início da conexão com o servidor websocket
+  wsClient.beginSSL(WS_HOST, WS_PORT, finalPath, WS_FINGERPRINT, WS_PROTOCOL);
+
+  delay(1000);
+
+  // Vinculação do manipulador de eventos
+  wsClient.onEvent(webSocketEvent);
+
+  // Início do sensor DHT
+  dht.begin();
+
+  // Definição do intervalo para envio dos dados do DHT
+  timer.set_interval(sendDHTData, 1000);
+
+  // Vinculação do timer ao loop
+  timer.attach_to_loop();
 }
 
+// Função de loop
 void loop()
 {
   digitalWrite(LED_BUILTIN, wifiMulti.run() == WL_CONNECTED ? HIGH : LOW);
